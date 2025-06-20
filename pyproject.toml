@@ -1,0 +1,10 @@
+[project]
+name = "productspy"
+version = "0.1.3"
+description = "A product price tracker library"
+authors = [{ name = "Rayan", email = "you@example.com" }]
+dependencies = [
+    "requests",
+    "beautifulsoup4",
+    "playwright"
+]
