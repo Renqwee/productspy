@@ -16,9 +16,9 @@ A simple Python library to grab product info like name and price from popular sh
 ```bash
 pip install -r requirements.txt
 playwright install
-
+```
 ## How to use
-
+```bash
 from productspy import get_product_info
 
 url = "put your product URL here"
@@ -27,8 +27,8 @@ info = get_product_info(url)
 print(f"Product Name: {info['name']}")
 print(f"Price: {info['price']}")
 print(f"URL: {info['url']}")
-
-Supported sites
+```
+## Supported sites
 
 -Amazon
 -Noon
@@ -37,9 +37,9 @@ Supported sites
 -Extra
 
 
-Cookies update (for AliExpress)
+## Cookies update (for AliExpress)
 If cookies expire, the library will open a browser window so you can log in or verify yourself. Just follow the steps and close the browser when you’re done.
 
-Contribute
+## Contribute
 Feel free to open an issue or pull request if you wanna help improve this.
 
