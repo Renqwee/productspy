@@ -61,7 +61,8 @@ class AliExpressTracker:
                 return {
                     "name": name,
                     "price": full_price,
-                    "url": self.url
+                    "url": self.url,
+                    "site": "AliExpress"
                 }
 
         except FetchError as e:

@@ -60,5 +60,6 @@ class CarrefourTracker:
         return {
             "name": name,
             "price": f"{price} {currency}",
-            "url": unquote(self.url)
+            "url": unquote(self.url),
+            "site": "Carrefour"
         }

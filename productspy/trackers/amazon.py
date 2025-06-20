@@ -81,7 +81,8 @@ class AmazonTracker:
         return {
             "name": name,
             "price": price,
-            "url": decoded_url
+            "url": decoded_url,
+            "site": "Amazon"
         }
 
     def _extract_title(self, soup: BeautifulSoup) -> Optional[str]:

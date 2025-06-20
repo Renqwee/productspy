@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "productspy"
-version = "0.1.5"
+version = "0.1.6"
 description = "A simple Python library to fetch product name and price from popular e-commerce websites."
 readme = "README.md"
 requires-python = ">=3.8"

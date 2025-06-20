@@ -45,7 +45,8 @@ class NoonTracker:
             return {
                 "name": name,
                 "price": full_price,
-                "url": self.url
+                "url": self.url,
+                "site": "Noon"
             }
 
         except Exception as e:
