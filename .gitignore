@@ -1,0 +1,12 @@
+dist/
+build/
+*.egg-info/
+
+__pycache__/
+*.pyc
+
+playwright-report/
+*.webm
+
+venv/
+.env/
