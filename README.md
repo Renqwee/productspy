@@ -30,11 +30,11 @@ print(f"URL: {info['url']}")
 ```
 ## Supported sites
 
--Amazon
--Noon
--AliExpress
--Carrefour
--Extra
+- Amazon
+- Noon
+- AliExpress
+- Carrefour
+- Extra
 
 
 ## Cookies update (for AliExpress)
