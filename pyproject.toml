@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "productspy"
+version = "0.2.0"
+description = "Extract product name, price and availability from shopping sites."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Renqwee" }]
+keywords = ["scraping", "price-tracking", "ecommerce", "amazon", "noon"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Developers",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+]
+dependencies = [
+    "requests>=2.31",
+    "beautifulsoup4>=4.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov", "ruff"]
+[project.urls]
+Homepage = "https://github.com/Renqwee/productspy"
+Issues = "https://github.com/Renqwee/productspy/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["productspy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
