@@ -18,7 +18,7 @@ from .utils.url_tools import extract_domain
 
 from . import trackers as _trackers  # noqa: F401
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "get_product_info",
