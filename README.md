@@ -120,7 +120,10 @@ Any `FetchConfig` field can be passed as a keyword: `timeout`, `max_retries`,
 | Noon (noon.com) | Working — verified on a live page: name, price, currency, availability, SKU, image, list price |
 | Extra (extra.com) | Tracker written — JSON-LD + GTM dataLayer fallback. Unit-tested, **not yet verified against a live page** |
 | Carrefour KSA (carrefourksa.com) | Working — price and list price read from the RSC flight payload; **its JSON-LD `offers.price` is the discount amount and is discarded**. `?sid=` is required and is injected when missing |
-| Amazon | Not yet implemented — needs custom DOM extraction |
+| Amazon (amazon.*) | Working — verified live on 4 products across amazon.sa,
+  amazon.de and amazon.co.uk: name, price, currency, list price, availability,
+  seller, image, ASIN. Pins the delivery country so the tracked price stays on
+  one market |
 | AliExpress | Not yet implemented — data lives in an in-page JS variable |
 
 Adding a store is one file in `productspy/trackers/` plus a `@register()`
