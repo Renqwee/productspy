@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 
 from ..base import BaseTracker
 from ..registry import register
+from ..utils.url_tools import canonical_url
 
 
 @register("noon.com")
@@ -14,6 +15,24 @@ class NoonTracker(BaseTracker):
     default_currency = "SAR"
     accept_language = "en-SA,en;q=0.9,ar;q=0.8"
 
+    def normalize_url(self, url: str) -> str:
+        """Drop every query param.
+
+        A Noon PDP is identified entirely by its path — the /p/ segment
+        after the N-code SKU. Everything in the query string is routing
+        noise: ?o= is the offer/seller hint the search page attaches,
+        utm_* comes from ads, and both change per visit. Keeping them
+        means the same phone shared from search, from an ad and from the
+        app is stored as three separate tracked products, each with its
+        own price history and its own duplicate alert.
+
+        NOT verified against a live page yet: if Noon ever needs ?o= to
+        render a specific seller's price, this would silently switch the
+        tracked price to the default offer. Run try_live.py on a URL
+        with and without ?o= and compare before trusting it.
+        """
+        return canonical_url(url)
+
     def parse(self, soup: BeautifulSoup, html: str) -> dict[str, Any]:
         # Verified against a live Noon PDP: schema.org markup carries
         # name, price, currency, availability, image and SKU. No need to
@@ -21,27 +40,11 @@ class NoonTracker(BaseTracker):
         product = self.find_json_ld_product(soup)
         if product:
             data = self.from_json_ld(product)
-            data["list_price"] = self._strikethrough_price(product)
+            data["list_price"] = self.list_price_from_json_ld(product)
             if data.get("name") and data.get("price") is not None:
                 return data
 
         return self._from_dom(soup)
-
-    @staticmethod
-    def _strikethrough_price(product: dict[str, Any]) -> Any:
-        """Pre-discount price, when Noon advertises one.
-
-        Lets a tracker tell a real markdown from a raised-then-cut price.
-        """
-        offers = product.get("offers") or {}
-        if isinstance(offers, list):
-            offers = offers[0] if offers else {}
-        spec = offers.get("priceSpecification") or {}
-        if isinstance(spec, list):
-            spec = spec[0] if spec else {}
-        if "strikethrough" in str(spec.get("priceType", "")).lower():
-            return spec.get("price")
-        return None
 
     def _from_dom(self, soup: BeautifulSoup) -> dict[str, Any]:
         """Fallback only — used if Noon ever drops its JSON-LD block."""

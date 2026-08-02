@@ -1,6 +1,6 @@
 import re
-from urllib.parse import urlparse
-from typing import Optional
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+from typing import Iterable, Optional
 
 def extract_asin(url: str) -> Optional[str]:
     path = urlparse(url).path
@@ -25,6 +25,30 @@ def extract_domain(url: str) -> Optional[str]:
         return domain
     except Exception:
         return None
+
+
+def canonical_url(url: str, keep_params: Iterable[str] = ()) -> str:
+    """Strip the query string down to `keep_params` and drop the fragment.
+
+    Why this exists: the bot stores one row per URL. Noon appends ?o=,
+    ads append ?utm_source=, shares append #ref — so the same product
+    arriving from three places becomes three tracked items with three
+    separate price histories and three duplicate alerts.
+
+    keep_params is per store: a param that selects the variant (colour,
+    size, seller) must survive, anything that only identifies the
+    referrer must not.
+    """
+    if not url:
+        return url
+    parsed = urlparse(url)
+    keep = {p.lower() for p in keep_params}
+    query = ""
+    if keep:
+        pairs = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+                 if k.lower() in keep]
+        query = urlencode(pairs)
+    return urlunparse(parsed._replace(query=query, fragment=""))
 
 # Country-code TLD -> ISO currency. Used when a page states a price but
 # no currency, which is common on Amazon's regional storefronts.

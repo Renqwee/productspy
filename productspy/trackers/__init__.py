@@ -1,3 +1,5 @@
-from . import noon  # noqa: F401
+import pkgutil
+from importlib import import_module
 
-__all__ = ["noon"]
+for _module in pkgutil.iter_modules(__path__):
+    import_module(f"{__name__}.{_module.name}")
