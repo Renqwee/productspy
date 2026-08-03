@@ -9,7 +9,17 @@ from typing import Any, Optional
 # Arabic-Indic digits -> ASCII, plus Arabic decimal/thousands separators
 _DIGIT_MAP = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
 _CURRENCY_HINTS = {
-    "SAR": ("sar", "ر.س", "﷼", "sr "),
+    # \u20c1 is the new Saudi-Riyal sign. Safe to add: it denotes that one
+    # currency and nothing else, unlike the spelled-out "ريال", which is
+    # shared with the Qatari, Omani and Yemeni riyal — and which would win
+    # on length over "ر.ق", reading a Qatari page as SAR.
+    #
+    # Extra renders it, but never sends it: zero occurrences in the served
+    # HTML of both reference pages, in any encoding. The markup says the
+    # ASCII string "SAR" and the glyph is drawn client-side, so this entry
+    # changes nothing for ExtraTracker. It is here for callers that pass in
+    # text copied from a rendered page.
+    "SAR": ("sar", "ر.س", "﷼", "\u20c1", "sr "),
     "AED": ("aed", "د.إ", "dhs", "dirham"),
     "QAR": ("qar", "ر.ق"),
     "KWD": ("kwd", "د.ك"),
