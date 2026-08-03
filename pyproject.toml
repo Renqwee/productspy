@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Renqwee" }]
-keywords = ["scraping", "price-tracking", "ecommerce", "amazon", "noon"]
+keywords = ["scraping", "price-tracking", "ecommerce", "amazon", "noon", "carrefour", "jarir"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -30,6 +30,9 @@ Issues = "https://github.com/Renqwee/productspy/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["productspy"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["tests/", "try_live.py", "verify_amazon.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
