@@ -10,12 +10,19 @@ import threading
 
 import pytest
 
-from productspy import BlockedError, FetchError, UnsupportedSiteError, configure
+from productspy import (
+    BlockedError,
+    FetchError,
+    UnsupportedSiteError,
+    configure,
+    get_product_info,
+)
 from productspy.http import FetchConfig, Fetcher, classify_transport_error
 from productspy.registry import resolve_tracker
+from productspy.trackers.amazon import AmazonTracker
 from productspy.trackers.extra import ExtraTracker
 from productspy.trackers.noon import NoonTracker
-from productspy.utils.url_tools import canonical_url
+from productspy.utils.url_tools import canonical_url, extract_asin
 
 
 # --------------------------------------------------------------------
@@ -133,6 +140,104 @@ def test_canonical_url_can_keep_selected_params():
 def test_canonical_url_leaves_a_clean_url_alone():
     url = "https://www.extra.com/en-sa/product/12345/"
     assert canonical_url(url) == url
+
+
+# --------------------------------------------------------------------
+# extract_asin: a path segment is not an ASIN
+# --------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "url, asin",
+    [
+        ("https://www.amazon.sa/dp/B0FWXZLD6F", "B0FWXZLD6F"),
+        ("https://www.amazon.sa/some-title/dp/B0FWXZLD6F/ref=sr_1_1", "B0FWXZLD6F"),
+        ("https://www.amazon.de/gp/product/B09WVVZQD3?th=1", "B09WVVZQD3"),
+        ("https://www.amazon.co.uk/product/B07TCB5DBG/", "B07TCB5DBG"),
+        ("https://www.amazon.sa/B0CDL3CQHV", "B0CDL3CQHV"),
+        ("https://www.amazon.sa/B0CDL3CQHV/ref=x", "B0CDL3CQHV"),
+        ("https://www.amazon.com/dp/0306406152", "0306406152"),   # ISBN-10
+        ("https://www.amazon.com/043935806X/", "043935806X"),     # ISBN-10, X check
+    ],
+)
+def test_extract_asin_finds_real_identifiers(url, asin):
+    assert extract_asin(url) == asin
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.amazon.sa/SMARTPHONE/ref=x",   # a word, ten characters
+        "https://www.amazon.sa/HEADPHONES/",
+        "https://www.amazon.sa/CATEGORIES",
+        "https://www.amazon.sa/1234567890/",        # ten digits, not an ISBN-10
+    ],
+)
+def test_extract_asin_rejects_bare_path_words(url):
+    """A ten-character path segment is not an identifier.
+
+    Nothing else guards this: normalize_url then rebuilds
+    /dp/SMARTPHONE, throws the real path away and fetches a dead URL
+    with full confidence.
+    """
+    assert extract_asin(url) is None
+
+
+def test_normalize_url_keeps_a_url_it_cannot_identify():
+    url = "https://www.amazon.sa/SMARTPHONE/ref=x"
+    assert AmazonTracker(url, fetcher=object()).url == url
+
+
+# --------------------------------------------------------------------
+# Shortener detection is a routing boundary too
+# --------------------------------------------------------------------
+
+class _RecordingFetcher:
+    """Stands in for a Fetcher and records what got resolved."""
+
+    def __init__(self):
+        self.resolved = []
+
+    def resolve(self, url):
+        self.resolved.append(url)
+        return url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://data.com/p/123",        # contains 'a.co' inside 'dat[a.co]m'
+        "https://mega.com/x",
+        "https://alfa.com/y",
+        "https://example.com/a.co/page",  # in the path, not the host
+        "https://amzn.to.attacker.net/x",  # lookalike host ending elsewhere
+        "https://notamzn.to/x",
+        "https://s.click.aliexpress.com.attacker.net/x",
+    ],
+)
+def test_ordinary_urls_are_not_treated_as_short_links(url):
+    """Each false hit costs a HEAD plus a full redirect-following GET."""
+    fetcher = _RecordingFetcher()
+    with pytest.raises(UnsupportedSiteError):
+        get_product_info(url, fetcher=fetcher)
+    assert fetcher.resolved == []
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://amzn.to/3xYzAbC",
+        "https://amzn.eu/d/abc123",
+        "https://a.co/d/abc123",
+        "https://www.a.co/d/abc123",
+        "https://s.click.aliexpress.com/e/_abc123",
+        "https://noon.to/abc123",
+    ],
+)
+def test_real_short_links_still_resolve(url):
+    fetcher = _RecordingFetcher()
+    with pytest.raises(UnsupportedSiteError):
+        get_product_info(url, fetcher=fetcher)
+    assert fetcher.resolved == [url]
 
 
 # --------------------------------------------------------------------
