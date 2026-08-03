@@ -2,18 +2,56 @@ import re
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 from typing import Iterable, Optional
 
+_ISBN10_SHAPE = re.compile(r"[0-9]{9}[0-9X]$")
+
+
+def _looks_like_asin(code: str) -> bool:
+    """Vet a candidate id that the URL itself did not label as one.
+
+    Two accepted shapes: B0 + eight for goods, ISBN-10 for books.
+
+    The ISBN branch is checksum-verified, not shape-matched, because
+    shape alone accepts any ten digits — a category id, an order number,
+    a phone number in a slug. The check digit (sum of i * digit_i for
+    i = 1..10, divisible by 11) turns that into a 1-in-11 accident.
+    """
+    if len(code) != 10:
+        return False
+    if code.startswith("B0"):
+        return True
+    if not _ISBN10_SHAPE.match(code):
+        return False
+    total = sum(i * (10 if ch == "X" else int(ch))
+                for i, ch in enumerate(code, start=1))
+    return total % 11 == 0
+
+
 def extract_asin(url: str) -> Optional[str]:
+    """Pull the ASIN out of an Amazon URL, or None.
+
+    The first three patterns are anchored on a path segment that says
+    what follows is a product id, so they take the id as given. The
+    fourth has no such marker — any ten upper-case/digit segment matches
+    it — so it is the only one vetted by _looks_like_asin.
+
+    Without that check `/SMARTPHONE/ref=x` yields 'SMARTPHONE', and
+    AmazonTracker.normalize_url then rebuilds /dp/SMARTPHONE, discards
+    the real path and fetches a dead URL with full confidence. Returning
+    None leaves the caller's URL untouched, which is the honest answer.
+    """
     path = urlparse(url).path
     patterns = [
-        r"/dp/([A-Z0-9]{10})",
-        r"/gp/product/([A-Z0-9]{10})",
-        r"/product/([A-Z0-9]{10})",
-        r"/([A-Z0-9]{10})(?:[/?]|$)",
+        (r"/dp/([A-Z0-9]{10})", False),
+        (r"/gp/product/([A-Z0-9]{10})", False),
+        (r"/product/([A-Z0-9]{10})", False),
+        (r"/([A-Z0-9]{10})(?:[/?]|$)", True),
     ]
-    for pattern in patterns:
-        match = re.search(pattern, path)
-        if match:
-            return match.group(1)
+    for pattern, vetted in patterns:
+        for match in re.finditer(pattern, path):
+            # finditer, not search: on /SMARTPHONE/B0FWXZLD6F the first
+            # hit fails the check and the real id is the second.
+            if not vetted or _looks_like_asin(match.group(1)):
+                return match.group(1)
     return None
 
 def extract_domain(url: str) -> Optional[str]:

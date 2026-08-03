@@ -38,7 +38,45 @@ __all__ = [
     "ParseError",
 ]
 
-_SHORTENERS = ("amzn.to", "amzn.eu", "a.co", "s.click.aliexpress", "noon.to")
+# Short-link hosts. A trailing dot means "this host prefix, any TLD" —
+# s.click.aliexpress is not a whole domain, the storefront's TLD follows.
+_SHORTENERS = ("amzn.to", "amzn.eu", "a.co", "s.click.aliexpress.", "noon.to")
+
+
+def _is_short_link(url: str) -> bool:
+    """Match short-link hosts on label boundaries, never on a substring.
+
+    `any(s in url for s in _SHORTENERS)` — what this replaced — is the
+    same bug registry._pattern_matches exists to prevent, left standing
+    at the public entry point. 'a.co' sits inside dat[a.co]m, meg[a.co]m
+    and alf[a.co]m, and inside any path that mentions one. Every false
+    hit sends resolve() out for a HEAD plus a full redirect-following
+    GET on a link that never needed either.
+
+    The boundary cuts both ways: amzn.to.attacker.net is not amzn.to.
+    """
+    host = (extract_domain(url) or "").lower().strip(".")
+    if not host:
+        # Scheme-less input ('amzn.to/abc') — urlparse files the host
+        # under path, and resolve() used to get it anyway.
+        host = (extract_domain("//" + url) or "").lower().strip(".")
+    if not host:
+        return False
+
+    for pattern in _SHORTENERS:
+        if not pattern.endswith("."):
+            if host == pattern or host.endswith("." + pattern):
+                return True
+            continue
+        stem = pattern[:-1]
+        if not host.startswith(stem + "."):
+            continue
+        # Only a TLD may follow the stem: 'com', or a two-label suffix
+        # like 'co.uk'. Anything longer is a lookalike, not a storefront.
+        rest = host[len(stem) + 1:].split(".")
+        if 1 <= len(rest) <= 2 and all(label.isalpha() for label in rest):
+            return True
+    return False
 
 
 def configure(config: Optional[FetchConfig] = None, **options: Any) -> Fetcher:
@@ -61,7 +99,7 @@ def configure(config: Optional[FetchConfig] = None, **options: Any) -> Fetcher:
 
 def get_product_info(url: str, *, fetcher: Optional[Fetcher] = None) -> Product:
     fetcher = fetcher or get_default_fetcher()
-    if any(s in url for s in _SHORTENERS):
+    if _is_short_link(url):
         url = fetcher.resolve(url)
     domain = extract_domain(url)
     if not domain:
