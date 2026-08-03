@@ -13,6 +13,8 @@ supported.
 
 ## Install
 
+Requires Python 3.10+.
+
 ```bash
 pip install productspy
 ```
@@ -135,6 +137,7 @@ Any `FetchConfig` field can be passed as a keyword: `timeout`, `max_retries`,
 | Carrefour KSA (carrefourksa.com) | Working — price and list price read from the RSC flight payload; **its JSON-LD `offers.price` is the discount amount and is discarded**. `?sid=` is required and is injected when missing |
 | Amazon (amazon.\*) | Working — verified live on four products across amazon.sa, amazon.de and amazon.co.uk: name, price, currency, list price, availability, seller, image, ASIN. One tracker covers every storefront; the delivery country is pinned so the tracked price stays in one market |
 | Extra (extra.com) | Working — verified live on two products: name, price, currency, availability, SKU, image, list price. `offers.price` is the selling price here (checked against a discounted page, unlike Carrefour), but there is no `priceSpecification` at all, so the strikethrough is read from the app state, anchored on the SKU. The GTM dataLayer fallback is **unverified**: Extra's payloads are JS literals that never parse |
+| Jarir (jarir.com) | Working — verified live on three products: name, price, currency, availability, SKU, image, list price. `offers.price` is the selling price, checked on two discounted pages. No `priceSpecification`, so the strikethrough and stock detail come from `window.__INITIAL_STATE__`, matched to the page by SKU rather than a text window |
 | AliExpress | Not yet implemented — data lives in an in-page JS variable |
 
 Adding a store is one file in `productspy/trackers/` plus a `@register()`
@@ -182,6 +185,39 @@ hides the price because it will not ship to the pinned country (which is
 *not* the same as out of stock), and `availability_text`, the stock wording in
 the storefront's own language.
 
+### Jarir
+
+Every product page carries two identifiers. `sku` is رقم الصنف — the numeric
+item number, the one in the URL. The alphanumeric manufacturer code (رقم
+المنتج) lands in `raw["mpn"]` instead, since it never appears in a link and
+isn't what the store treats as stable.
+
+```python
+from productspy.trackers.jarir import JarirTracker
+
+product = JarirTracker("https://www.jarir.com/asus-zenbook-14-laptops-648717.html").fetch()
+product.in_stock          # False — this item isn't sold online at all
+product.raw["online_stock"]     # False, from is_stock_available
+product.raw["showroom_codes"]   # [] — no branch carries it either
+```
+
+`in_stock` reflects whether the item can be bought online, read from the
+store's own `is_stock_available` flag (its `stock.is_in_stock` field is a
+template default that reads `false` even on items that are in stock and
+selling — don't use it). This is a different situation from Amazon's
+`location_blocked`: there, an item that *is* sold gets hidden because of the
+delivery address. On Jarir, "غير متوفّر أونلاين، الرجاء التحقّق من التوفر في
+المعارض" means the item just isn't sold online, and `raw["showroom_codes"]`
+says which physical branches (if any) still carry it.
+
+Jarir mirrors every product at `/sa-en/<slug>.html` with an English name and
+otherwise identical data. The library treats it as a separate page rather
+than folding it into the Arabic one — pass whichever URL you were given.
+
 ## Contribute
 
 Feel free to open an issue or pull request.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
