@@ -467,6 +467,27 @@ def _find_csrf(html: str) -> Optional[str]:
     return None
 
 
+#: Wrappers holding the Subscribe & Save quote rather than the purchase
+#: price. Measured on amazon.sa B0BJKY2QC9, which offers both: the page
+#: says "One-time purchase SAR197.95" and "Subscribe & Save SAR178.15",
+#: a 10% auto-delivery discount on a different commitment entirely.
+_SUBSCRIPTION_CONTAINERS = frozenset({
+    "snsAccordionRowMiddle",
+    "subscriptionPrice",
+    "sns-base-slot",
+})
+
+
+def _in_subscription_block(block: Tag) -> bool:
+    """Is this a-price inside a subscription offer rather than the buy box?"""
+    node = block.parent
+    while node is not None and getattr(node, "get", None) is not None:
+        if node.get("id") in _SUBSCRIPTION_CONTAINERS:
+            return True
+        node = node.parent
+    return False
+
+
 def _find_price_blocks(soup: BeautifulSoup):
     """First container holding a real price, plus its pay and struck blocks.
 
@@ -475,13 +496,27 @@ def _find_price_blocks(soup: BeautifulSoup):
     two spellings of the same thing (the first in the main container, the
     second in sponsored listings). Keying on the class breaks at the first
     A/B test.
+
+    **Subscription prices are excluded outright**, not merely outranked.
+    On a page offering both, the first three containers hold only the
+    one-time price and taking pay[0] happens to be right — but
+    desktop_buybox and buybox, the last two entries, carry seven a-price
+    blocks with the subscription quote sitting among them. There pay[0]
+    is correct only because the DOM lists "One-time purchase" before
+    "Subscribe & Save", which is Amazon's layout choice on that day and
+    not a fact about the offer. Excluding the subscription wrappers turns
+    the safety from an ordering coincidence into a rule, and it changes
+    nothing on pages that have no subscription at all.
     """
     for container_id in _PRICE_CONTAINERS:
         node = soup.find(id=container_id)
         if not isinstance(node, Tag):
             continue
         blocks = node.select("span.a-price")
-        pay = [b for b in blocks if b.get("data-a-strike") != "true"]
+        pay = [
+            b for b in blocks
+            if b.get("data-a-strike") != "true" and not _in_subscription_block(b)
+        ]
         if not pay:
             continue
         struck = [b for b in blocks if b.get("data-a-strike") == "true"]

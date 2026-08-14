@@ -672,3 +672,59 @@ def test_parse_reports_the_market_it_used():
     data = AmazonTracker(UK_URL).parse(soup_of(html), html)
     assert data["market"] == "co.uk"
     assert data["ship_to"] == "GB"
+
+# ── عرض الاشتراك ──────────────────────────────────────────────────────────
+
+
+def _buybox_with_subscription():
+    """صندوق شراء يخلط سعر الشراء بسعر الاشتراك، كما على sa B0BJKY2QC9.
+
+    الترتيب هنا **مقلوب عمداً**: الاشتراك أولاً. الصفحة الحية تضع
+    «One-time purchase» قبله، وهذا بالضبط ما يجعل `pay[0]` صحيحاً
+    بالمصادفة هناك — فالـ fixture يقلبه ليختبر القاعدة لا الترتيب.
+    """
+    return f"""<html><body><div id="centerCol">
+      <span id="productTitle">Fine Baby Diapers</span>
+      <div id="desktop_buybox">
+        <div id="snsAccordionRowMiddle">
+          Subscribe &amp; Save
+          {a_price("SAR", "178", ".", "15", offscreen="SAR178.15")}
+        </div>
+        <div id="buyBoxAccordion">
+          One-time purchase
+          {a_price("SAR", "197", ".", "95", offscreen="SAR197.95")}
+        </div>
+      </div></div></body></html>"""
+
+
+def test_subscription_price_is_never_taken_as_the_purchase_price():
+    """البند (و): كتلة الاشتراك تُستبعد بقاعدة، لا تُتجاوز بترتيب.
+
+    حيّاً على sa B0BJKY2QC9: «One-time purchase SAR197.95» مقابل
+    «Subscribe & Save SAR178.15» — خصم 10% على التزام مختلف تماماً،
+    لا سعر هذا المنتج اليوم. وتتبّعه يعني سلسلة أرخص 10% بصمت.
+    """
+    html = _buybox_with_subscription()
+    container, pay, _ = _find_price_blocks(soup_of(html))
+    assert container == "desktop_buybox"
+    assert "197.95" in _price_from_block(pay)[0]
+    assert "178.15" not in _price_from_block(pay)[0]
+
+
+def test_every_surviving_block_is_the_purchase_price():
+    """ليس الأول فقط: بعد الاستبعاد ما يبقى مرشح خاطئ أصلاً."""
+    from productspy.trackers.amazon import _in_subscription_block
+
+    node = soup_of(_buybox_with_subscription()).find(id="desktop_buybox")
+    kept = [b for b in node.select("span.a-price") if not _in_subscription_block(b)]
+    assert kept, "لازم يبقى مرشح واحد على الأقل"
+    for block in kept:
+        assert "197.95" in _price_from_block(block)[0]
+
+
+def test_a_page_without_a_subscription_is_unaffected():
+    """الحارس المقابل: الاستبعاد ما يلمس الصفحات العادية."""
+    html = page(a_price("SAR", "1,349", ".", "10", offscreen="SAR 1,349.10"))
+    container, pay, _ = _find_price_blocks(soup_of(html))
+    assert container is not None
+    assert "1,349.10" in _price_from_block(pay)[0]
