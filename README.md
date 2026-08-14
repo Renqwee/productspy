@@ -180,10 +180,34 @@ is kept in the session, so every later product on that storefront reuses it.
 If it fails, the fetch still succeeds — you get the export-market price
 instead of the local one rather than an error.
 
-Two Amazon-specific keys land in `raw`: `location_blocked`, set when the page
-hides the price because it will not ship to the pinned country (which is
-*not* the same as out of stock), and `availability_text`, the stock wording in
-the storefront's own language.
+**A cart button is not proof of stock.** Amazon takes backorders: it shows
+"Temporarily out of stock. Order now and we'll deliver when available" *and*
+an active Add-to-cart button. Those come back `in_stock=False` with
+`raw["backorderable"] = True`, so a stocked-out item never reports as
+available:
+
+```python
+product.in_stock                 # False
+product.raw["backorderable"]     # True — orderable, just not held
+```
+
+**`in_stock` is `None` whenever the page hid the offer rather than reported on
+it.** Amazon has two ways of doing that, and only one explains itself:
+
+```python
+product.in_stock                    # None — not False
+product.raw["location_blocked"]     # True: "cannot be shipped to your location"
+product.raw["no_featured_offer"]    # True: no buy box at all, and no reason given
+product.raw["in_stock_source"]      # which signal decided
+product.raw["availability_text"]    # stock wording in the storefront's language
+```
+
+Neither page says anything about inventory, so `False` there would be a false
+out-of-stock alert on an item that is selling — and a silent one, since the
+value never changes again. Treat `None` as "ask again once the country is
+pinned", not as a stock level. `in_stock_source` is `"cart"`, `"outOfStock"`,
+`"location_blocked"` or `"no_featured_offer"`; without it a `None` cannot tell
+you whether nothing matched or something matched and declined to guess.
 
 ### Jarir
 

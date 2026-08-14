@@ -476,11 +476,59 @@ def _price_from_block(block: Tag) -> tuple[Optional[str], Optional[str]]:
 #: where the request came from, not on inventory. Confirmed by the price
 #: appearing the moment the delivery country was pinned, nothing else
 #: changed.
+#: The German arm was written as 'nicht an (deine|die) ausgew' and never
+#: matched anything: the live sentence is 'kann nicht an **den von dir**
+#: ausgewählten Lieferort versendet werden' (B09WVVZQD3). Four words sat
+#: between the two anchors and the alternation allowed one. Location blocks
+#: on amazon.de went undetected from the day it was written — invisible
+#: because a missed block reads as an ordinary page, not as an error.
+#: Hence the gap is spanned by a bounded wildcard now, and the second
+#: German arm matches the follow-up sentence independently.
 _DISPATCH_BLOCK = re.compile(
     r"cannot be (dispatched|shipped) to|"
     r"choose a different delivery location|"
-    r"nicht an (deine|die) ausgew|"
+    r"nicht an .{0,30}?ausgew|"
+    r"w[äa]hle einen anderen lieferort|"
     r"ne peut pas [êe]tre livr",
+    re.I,
+)
+
+#: Where the block wording has been seen. #outOfStock is the documented
+#: home, but amazon.de put it in the delivery line instead, on a page with
+#: **no #outOfStock at all** and a stock count of 16 sitting right above it
+#: (B09WVVZQD3, live). Reading only #outOfStock there produced no in_stock
+#: key whatsoever — not even a None — on a plain location block.
+_BLOCK_CONTAINERS = (
+    "outOfStock",
+    "deliveryBlockMessage",
+    "addToCart_feature_div",
+)
+
+#: A store saying "out of stock" **while still offering a cart button**.
+#: Amazon backorders: 'Temporarily out of stock. Order now and we'll deliver
+#: when available.' — verified live on amazon.sa B0DWZDWRVW, which the cart
+#: button alone reported as in stock.
+#:
+#: Wording, not colour, because colour does not survive the border:
+#: a-color-success does mean in stock, but its **absence** means nothing.
+#: amazon.de returned a-color-price on 'Nur noch 16 auf Lager' (16 left, in
+#: stock) and amazon.sa returned a-color-base on 'Temporarily out of stock'
+#: — same "not success", opposite meanings.
+#:
+#: Only the English arm is verified live. The rest is extrapolation from
+#: Amazon's own standard strings, and is written to fail closed: every
+#: alternative needs a negation or an explicit stock-out phrase, so the
+#: in-stock wordings we have actually seen — 'In Stock', 'Auf Lager',
+#: 'Nur noch 16 auf Lager', 'Usually ships within 7 to 8 days' — cannot
+#: match any of them.
+_OUT_OF_STOCK_TEXT = re.compile(
+    r"out of stock|currently unavailable|"        # en (verified)
+    r"nicht auf lager|nicht verf[üu]gbar|"        # de
+    r"rupture de stock|actuellement indisponible|"  # fr
+    r"sin stock|no disponible|"                   # es
+    r"non disponibile|"                           # it
+    r"niet op voorraad|"                          # nl
+    r"غير متوفر|نفد",                              # ar
     re.I,
 )
 
@@ -493,27 +541,127 @@ def _availability(soup: BeautifulSoup) -> dict[str, Any]:
     failed silently on every non-English storefront — hence the primary
     test being element presence rather than wording, with the raw text kept
     for the caller.
+
+    Seven states, all measured live 2026-08-14:
+
+        page                       #outOfStock  cart  in_stock
+        sa B0FWXZLD6F 'In Stock'       -         yes   True
+        sa B0CDL3CQHV 'ships 7-8d'     -         yes   True
+        sa B0863TXGM3 unavailable     yes         -    False
+        sa B0DWZDWRVW 'Temporarily     -        yes    False + backorderable
+                       out of stock'
+        com B0000AZK4G location       yes         -    None + location_blocked
+        de  B09WVVZQD3 location        -          -    None + location_blocked
+                       ('Nur noch 16 auf Lager' — block is in the
+                        delivery line, no #outOfStock anywhere)
+        com B0002E1G5C no offer        -          -    None + no_featured_offer
+                       (same URL pinned to US: cart, 'In Stock', $12.99)
+
+    Note rows 4 and 6: neither #outOfStock nor the cart button decides on
+    its own. A cart button appears on a stocked-out backorder, and a
+    location block appears with no #outOfStock at all.
+
+    **The cart button is not proof of stock.** B0DWZDWRVW offers it while
+    saying 'Temporarily out of stock. Order now and we'll deliver when
+    available.' — Amazon takes the order and ships it whenever the item
+    returns. Reading the button reported it as in stock, which is the alert
+    inverted. So the wording is checked first, and `backorderable` keeps
+    the distinction from a dead listing.
+
+    Rows 5-7 return None on purpose, and all three used to return something
+    else. None of those pages says anything about inventory, so any boolean
+    is invented:
+
+    - **Location block is not stock.** Amazon serves the refusal inside
+      #outOfStock, and reading the id alone reported False for an item that
+      was selling — just not to us. That is a false "out of stock" alert on
+      a live listing, and it is silent, since the number never moves again.
+      It is checked across _BLOCK_CONTAINERS rather than one id because
+      amazon.de puts the same sentence in the delivery line instead.
+      If this key survives a country pin, the pin did not take — see recover.
+
+    - **No featured offer is not stock either**, and on the one page we
+      have it was the location block in disguise. B0002E1G5C carries no buy
+      box at all from an unpinned Saudi IP: #unqualifiedBuyBox_feature_div,
+      a 'See All Buying Options' link, an **empty** #availability, no cart
+      button — and, unlike the state above, **no sentence saying why**.
+      The same URL through the full pipeline, country pinned to US, returns
+      'In Stock' at $12.99. So Amazon has two ways of hiding an offer from
+      a location and only one of them explains itself; False here would be
+      a false out-of-stock alert on an item selling at full price.
+      Its two 'Currently unavailable' strings are twister variation
+      **templates** in a JS blob, not page state — reading those is the
+      Jarir stock_status trap, so the marker is the container, not wording.
+      Unverified: whether this state ever survives a successful pin. If it
+      does, the cause there is something other than location.
+
+    in_stock_source names whichever signal decided, on the Jarir pattern:
+    a None in the field alone cannot say whether nothing matched or
+    something matched and refused to guess.
     """
     out: dict[str, Any] = {}
     availability = soup.find(id="availability")
-    if availability is not None:
-        out["availability_text"] = _clean(availability.get_text(" ", strip=True))
+    # Present-but-empty is a real live state (B0002E1G5C), and an empty
+    # string in raw reads like a store that answered blank rather than one
+    # that was never asked.
+    text = _clean(availability.get_text(" ", strip=True)) if availability is not None else ""
+    if text:
+        out["availability_text"] = text
+
+    # The narrowest carrier of the stock sentence, and the one to match on:
+    # #availability can pick up neighbouring furniture, this span holds the
+    # message alone ('Temporarily out of stock.').
+    message_el = soup.select_one(".primary-availability-message")
+    message = _clean(message_el.get_text(" ", strip=True)) if message_el is not None else text
 
     out_of_stock = soup.find(id="outOfStock")
     # Not verified: is #add-to-cart-button always present on an in-stock
     # page? Not yet checked against a live one.
     cart = soup.find(id="add-to-cart-button") or soup.find(id="buy-now-button")
+    no_offer = soup.find(id="unqualifiedBuyBox_feature_div")
+
+    blocks = [text]
+    for container_id in _BLOCK_CONTAINERS:
+        node = soup.find(id=container_id)
+        if node is not None:
+            blocks.append(_clean(node.get_text(" ", strip=True)))
+    blocked = any(_DISPATCH_BLOCK.search(b) for b in blocks)
 
     if out_of_stock is not None:
-        text = _clean(out_of_stock.get_text(" ", strip=True))
+        # #availability holds the same sentence without the wishlist and
+        # "similar items" furniture the surrounding box drags in, so it is
+        # preferred when it has anything to say.
+        out["unavailable_reason"] = (text or blocks[1])[:200]
+
+    # Order matters, and the location block comes first on purpose: it
+    # outranks every other signal because it says nothing about stock at
+    # all. amazon.de proved the two are independent — 'Nur noch 16 auf
+    # Lager' (16 left) sitting directly above a refusal to ship here.
+    if blocked:
+        out["in_stock"] = None
+        out["location_blocked"] = True
+        out["in_stock_source"] = "location_blocked"
+    elif out_of_stock is not None:
         out["in_stock"] = False
-        out["unavailable_reason"] = text[:200]
-        if _DISPATCH_BLOCK.search(text):
-            # A real distinction for the bot: the product exists and is
-            # selling, it is just hidden from our location. An "out of
-            # stock" alert here would be a lie. If this key shows up after
-            # the country was pinned, the pin did not take — see recover.
-            out["location_blocked"] = True
+        out["in_stock_source"] = "outOfStock"
+    elif message and _OUT_OF_STOCK_TEXT.search(message):
+        # Checked **before** the cart button, which is the whole point: on a
+        # backorder Amazon says "Temporarily out of stock" and offers the
+        # button anyway. Trusting the button there reported an out-of-stock
+        # item as in stock — the exact inversion of the alert the caller
+        # wants.
+        out["in_stock"] = False
+        out["unavailable_reason"] = message[:200]
+        out["in_stock_source"] = "availability_text"
+        if cart is not None:
+            # Orderable, just not held: the caller may want to treat this
+            # differently from a dead listing, and only this key says which.
+            out["backorderable"] = True
     elif cart is not None:
         out["in_stock"] = True
+        out["in_stock_source"] = "cart"
+    elif no_offer is not None:
+        out["in_stock"] = None
+        out["no_featured_offer"] = True
+        out["in_stock_source"] = "no_featured_offer"
     return out

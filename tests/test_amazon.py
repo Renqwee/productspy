@@ -244,11 +244,12 @@ def test_complete_page_is_accepted():
 # ── التوفر وحجب الموقع ────────────────────────────────────────────────────
 
 
-def test_delivery_block_is_not_out_of_stock():
+def test_delivery_block_is_unknown_stock_not_out_of_stock():
     """بريطانيا حياً: #outOfStock موجود ونصه عن موقع التوصيل لا المخزون.
 
     المنتج يُباع في بريطانيا؛ أمازون يخفيه عن IP سعودي. تنبيه
-    "نفد المخزون" هنا كذب على مستخدم البوت.
+    "نفد المخزون" هنا كذب على مستخدم البوت — والصفحة ما قالت عن
+    المخزون شيئاً أصلاً، فالقيمة الصادقة None لا False.
     """
     html = """<html><body><div id="centerCol"><span id="productTitle">x</span>
       <div id="outOfStock">This item cannot be dispatched to your selected
@@ -256,7 +257,18 @@ def test_delivery_block_is_not_out_of_stock():
       <div id="availability">This item cannot be dispatched to your selected
       delivery location.</div></div></body></html>"""
     out = _availability(soup_of(html))
-    assert out["in_stock"] is False
+    assert out["in_stock"] is None
+    assert out["location_blocked"] is True
+    assert out["in_stock_source"] == "location_blocked"
+
+
+def test_us_wording_of_the_delivery_block_is_caught_too():
+    """حيّاً على com B0000AZK4G: 'shipped' لا 'dispatched'."""
+    html = """<html><body><div id="outOfStock">This item cannot be shipped to
+      your selected delivery location. Please choose a different delivery
+      location.</div></body></html>"""
+    out = _availability(soup_of(html))
+    assert out["in_stock"] is None
     assert out["location_blocked"] is True
 
 
@@ -265,7 +277,114 @@ def test_genuine_out_of_stock_is_not_flagged_as_location_blocked():
       We don't know when or if this item will be back in stock.</div></body></html>"""
     out = _availability(soup_of(html))
     assert out["in_stock"] is False
+    assert out["in_stock_source"] == "outOfStock"
     assert "location_blocked" not in out
+
+
+def test_unavailable_reason_prefers_availability_over_the_outer_box():
+    """كتلة #outOfStock تجرّ معها أثاث قوائم الرغبات، و#availability لا."""
+    html = """<html><body>
+      <div id="outOfStock">Currently unavailable. Add to List Added to
+      Unable to add item to List. Please try again.</div>
+      <div id="availability">Currently unavailable.</div></body></html>"""
+    out = _availability(soup_of(html))
+    assert out["unavailable_reason"] == "Currently unavailable."
+
+
+def test_no_featured_offer_is_unknown_stock_not_in_stock():
+    """حيّاً على com B0002E1G5C من IP سعودي بلا تثبيت: ولا صندوق شراء.
+
+    لا #outOfStock ولا زر سلة، و#availability **فاضية** — وبلا أي جملة
+    تقول السبب. نفس الرابط بعد تثبيت البلد على US رجّع 'In Stock' بـ
+    12.99$. فـ False هنا تنبيه نفاد كاذب على صنف يُباع بسعره الكامل.
+    """
+    html = """<html><body><div id="centerCol"><span id="productTitle">x</span>
+      <div id="availability"></div>
+      <div id="unqualifiedBuyBox_feature_div">See All Buying Options</div>
+      </div></body></html>"""
+    out = _availability(soup_of(html))
+    assert out["in_stock"] is None
+    assert out["no_featured_offer"] is True
+    assert out["in_stock_source"] == "no_featured_offer"
+    # فاضية تُحذف: نص فاضٍ في raw يُقرأ كأن المتجر أجاب بلا شيء
+    assert "availability_text" not in out
+
+
+def test_backorder_wording_beats_the_cart_button():
+    """حيّاً على sa B0DWZDWRVW: أمازون يقول نافد ويعطي زر سلة برضه.
+
+    الطلب المسبق: يأخذ طلبك ويشحنه لما يرجع الصنف. قراءة الزر وحده
+    كانت تقلب التنبيه — صنف نافد يُبلَّغ عنه كأنه متوفر.
+    """
+    html = """<html><body>
+      <div id="availability"><span class="a-size-medium a-color-base
+        primary-availability-message">Temporarily out of stock.</span></div>
+      <input id="add-to-cart-button"></body></html>"""
+    out = _availability(soup_of(html))
+    assert out["in_stock"] is False
+    assert out["in_stock_source"] == "availability_text"
+    assert out["backorderable"] is True
+
+
+def test_slow_shipping_is_still_in_stock():
+    """الحارس المقابل: 'ships within 7 to 8 days' متوفر لا نافد.
+
+    ولا 'Nur noch 16 auf Lager' ولا 'Only 2 left in stock' — كلها
+    ما تطابق نمط النفاد، وإلا انقلب الحارس على نفسه.
+    """
+    for wording in ("Usually ships within 7 to 8 days",
+                    "Nur noch 16 auf Lager",
+                    "Only 2 left in stock - order soon.",
+                    "In Stock"):
+        html = f"""<html><body><div id="availability"><span
+          class="primary-availability-message">{wording}</span></div>
+          <input id="add-to-cart-button"></body></html>"""
+        out = _availability(soup_of(html))
+        assert out["in_stock"] is True, wording
+        assert "backorderable" not in out, wording
+
+
+def test_german_delivery_block_is_caught_outside_out_of_stock():
+    """حيّاً على de B09WVVZQD3: الحجب في سطر التوصيل، وبلا #outOfStock.
+
+    والنمط الألماني القديم 'nicht an (deine|die) ausgew' ما كان يطابق
+    الجملة الحية 'nicht an den von dir ausgewählten Lieferort' — أربع
+    كلمات بين المرساتين والبديل يسمح بوحدة. فحجب الموقع على أمازون
+    ألمانيا كان يعدي غير مكتشَف.
+
+    و'Nur noch 16 auf Lager' فوقه مباشرة: المحوران مستقلان فعلاً.
+    """
+    html = """<html><body>
+      <div id="availability"><span class="primary-availability-message">Nur
+        noch 16 auf Lager</span></div>
+      <div id="deliveryBlockMessage">Dieser Artikel kann nicht an den von dir
+        ausgewählten Lieferort versendet werden. Wähle einen anderen
+        Lieferort.</div></body></html>"""
+    out = _availability(soup_of(html))
+    assert out["in_stock"] is None
+    assert out["location_blocked"] is True
+
+
+def test_location_block_outranks_a_stock_count():
+    """الحجب يتقدم على كل إشارة: الصفحة ما قالت عن المخزون شيئاً يخصنا."""
+    html = """<html><body>
+      <div id="availability"><span class="primary-availability-message">In
+        Stock</span></div>
+      <div id="deliveryBlockMessage">This item cannot be shipped to your
+        selected delivery location.</div>
+      <input id="add-to-cart-button"></body></html>"""
+    out = _availability(soup_of(html))
+    assert out["in_stock"] is None
+    assert out["in_stock_source"] == "location_blocked"
+
+
+def test_in_stock_reports_which_signal_decided():
+    html = """<html><body><div id="availability">In Stock</div>
+      <input id="add-to-cart-button"></body></html>"""
+    out = _availability(soup_of(html))
+    assert out["in_stock"] is True
+    assert out["in_stock_source"] == "cart"
+    assert out["availability_text"] == "In Stock"
 
 
 def test_availability_text_is_kept_in_the_store_language():
