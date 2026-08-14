@@ -22,3 +22,22 @@ jobs:
           python -m pip install -e ".[dev]"
       - name: Test
         run: python -m pytest -q
+
+  package:
+    runs-on: ubuntu-latest
+    name: package contents
+    # 0.4.0 was built carrying local editor state and nothing noticed.
+    # pyproject now uses an allowlist; this checks the built artifact
+    # rather than the config, so it still catches the leak if the
+    # config is what turns out to be wrong.
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install build backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+      - name: Build and inspect
+        run: python scripts/check_package.py
