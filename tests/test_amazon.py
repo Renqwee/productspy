@@ -570,6 +570,95 @@ def test_recover_is_a_noop_without_a_country():
     assert tracker.recover({}, None) is False
 
 
+class _FakeFetcher:
+    """Fetcher double that can be weak-referenced and counts POSTs."""
+
+    def __init__(self, succeed_on=None):
+        self.posts = 0
+        self.succeed_on = succeed_on   # رقم المحاولة التي تنجح، أو None
+
+    def post(self, *args, **kwargs):
+        self.posts += 1
+
+        class _R:
+            text = ('{"isValidAddress":1,"isAddressUpdated":1}'
+                    if self.succeed_on == self.posts else '{"isAddressUpdated":0}')
+        return _R()
+
+
+class _Response:
+    text = '<html>"csrfToken":"abcdefgh12345678"</html>'
+
+
+def _fresh_tracker(fetcher):
+    """tracker جديد لكل منتج — هذا ما يفعله المستدعي فعلاً."""
+    return AmazonTracker(UK_URL, fetcher=fetcher)
+
+
+def test_a_failed_pin_is_retried_on_the_next_product():
+    """البند (هـ): فشل واحد كان يعطّل التثبيت طول عمر الـ Fetcher.
+
+    شوهد حيّاً على amazon.co.uk: الـ POST فشل، والمضيف كان يُعلَّم **قبل**
+    المحاولة، فكل منتج لاحق على ذاك المتجر يقرأ سعر التصدير بصمت. الفشل
+    في التثبيت ليس تثبيتاً، والنجاح وحده يحق له أن يقول ذلك.
+    """
+    fetcher = _FakeFetcher(succeed_on=None)
+    for _ in range(2):
+        data = {}
+        assert _fresh_tracker(fetcher).recover(data, _Response()) is False
+        assert data["market_pin_failed"] is True
+    assert fetcher.posts == 2      # أُعيدت المحاولة، لا إقصاء دائم
+
+
+def test_retries_are_bounded_rather_than_endless():
+    """والحد موجود: النقطة النهائية غير موثّقة وقد تتوقف نهائياً.
+
+    فبعد استنفاد الميزانية نتوقف عن إضافة POST لكل جلبة، ويبقى
+    market_pin_failed مرفوعاً حتى لا يصير الصمت هو الرسالة.
+    """
+    from productspy.trackers.amazon import _MAX_PIN_ATTEMPTS
+
+    fetcher = _FakeFetcher(succeed_on=None)
+    for _ in range(_MAX_PIN_ATTEMPTS + 3):
+        data = {}
+        _fresh_tracker(fetcher).recover(data, _Response())
+        assert data["market_pin_failed"] is True
+    assert fetcher.posts == _MAX_PIN_ATTEMPTS
+
+
+def test_success_marks_the_host_and_stops_further_posts():
+    fetcher = _FakeFetcher(succeed_on=1)
+    assert _fresh_tracker(fetcher).recover({}, _Response()) is True
+    for _ in range(3):
+        data = {}
+        assert _fresh_tracker(fetcher).recover(data, _Response()) is False
+        assert "market_pin_failed" not in data
+    assert fetcher.posts == 1
+
+
+def test_success_after_a_failure_clears_the_budget():
+    """المحاولة الثانية تنجح، فلا يبقى أثر للأولى."""
+    fetcher = _FakeFetcher(succeed_on=2)
+    assert _fresh_tracker(fetcher).recover({}, _Response()) is False
+    assert _fresh_tracker(fetcher).recover({}, _Response()) is True
+    assert _fresh_tracker(fetcher).recover({}, _Response()) is False
+    assert fetcher.posts == 2
+
+
+def test_market_pinned_distinguishes_untried_from_failed():
+    """None يعني «السؤال لا محل له»، وFalse يعني «حاولنا وقد يكون تصديراً»."""
+    assert AmazonTracker(UK_URL, pin_market=False).parse(
+        soup_of("<html><span id='productTitle'>x</span></html>"), ""
+    )["market_pinned"] is None
+
+    fetcher = _FakeFetcher(succeed_on=1)
+    tracker = _fresh_tracker(fetcher)
+    html = "<html><span id='productTitle'>x</span></html>"
+    assert tracker.parse(soup_of(html), html)["market_pinned"] is False
+    tracker.recover({}, _Response())
+    assert tracker.parse(soup_of(html), html)["market_pinned"] is True
+
+
 def test_locale_override_can_set_all_three_axes():
     tracker = AmazonTracker(DE_URL, locale="en-GB:GBP:GB")
     assert tracker.accept_language.startswith("en-GB")

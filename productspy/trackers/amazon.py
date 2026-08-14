@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from typing import Any, Optional
 from urllib.parse import urlsplit, parse_qs
 from weakref import WeakKeyDictionary
@@ -154,11 +155,32 @@ _CSRF_PATTERNS = (
     r'name="anti-csrftoken-a2z"\s+value="([^"]{8,})"',
 )
 
-#: Which (fetcher, host) pairs already had their country pinned. Weak keys
-#: so we never keep a Fetcher alive. Kept here rather than on the Fetcher:
-#: the transport layer knows nothing about Amazon, and store-specific state
-#: has no business living there.
+#: Which (fetcher, host) pairs already had their country pinned
+#: **successfully**. Weak keys so we never keep a Fetcher alive. Kept here
+#: rather than on the Fetcher: the transport layer knows nothing about
+#: Amazon, and store-specific state has no business living there.
 _PINNED: "WeakKeyDictionary[Any, set[str]]" = WeakKeyDictionary()
+
+#: Failed attempts per (fetcher, host), so a bad run is retried a few times
+#: instead of disabling the pin for the life of the Fetcher.
+#:
+#: This used to be one set, marked **before** the attempt, on the reasoning
+#: that a failure is no reason to loop. The cost of that shortcut was
+#: measured on amazon.co.uk: the POST failed once, and every later product
+#: on that storefront read an export price with nothing to show for it —
+#: the exact silent drift this project is built against. Failing to pin is
+#: not the same as being pinned, and only success may say so.
+_PIN_FAILURES: "WeakKeyDictionary[Any, dict[str, int]]" = WeakKeyDictionary()
+
+#: Attempts per host before giving up. Bounded because the endpoint is
+#: undocumented and may simply stop working — retrying forever would add a
+#: POST to every fetch for nothing.
+_MAX_PIN_ATTEMPTS = 3
+
+#: Guards both maps. Fetcher is thread-safe behind its own lock while this
+#: state was not, which was a documented inconsistency; splitting one set
+#: into two structures that must agree is what makes it worth closing.
+_PIN_LOCK = threading.Lock()
 
 
 @register("amazon.")
@@ -240,20 +262,45 @@ class AmazonTracker(BaseTracker):
         fetch from another, and Amazon most likely ties session state to
         the IP — unverified. If that happens, pin a single proxy or pass
         pin_market=False.
+
+        **Only success marks the host.** A failure counts against a small
+        budget and is retried on the next product, because the alternative
+        — seen live on amazon.co.uk — is one failed POST silently
+        committing the Fetcher to export prices forever. When the budget
+        runs out the caller is told through data["market_pin_failed"]
+        rather than left to wonder why the currency looks wrong.
         """
         if not self.ship_to or self.fetcher is None:
             return False
         host = urlsplit(self.url).netloc
         try:
-            pinned = _PINNED.setdefault(self.fetcher, set())
+            with _PIN_LOCK:
+                pinned = _PINNED.setdefault(self.fetcher, set())
+                failures = _PIN_FAILURES.setdefault(self.fetcher, {})
+                if host in pinned:
+                    return False
+                attempts = failures.get(host, 0)
+                if attempts >= _MAX_PIN_ATTEMPTS:
+                    data["market_pin_failed"] = True
+                    return False
         except TypeError:
             # Fetcher does not accept weak references (a bare test double,
             # say). That is no reason to fail the fetch — skip the pin.
             return False
-        if host in pinned:
-            return False
-        pinned.add(host)  # marked before trying: failure is no reason to loop
-        return self._pin_delivery_country(response.text)
+
+        # Outside the lock: this is a network call, and holding a lock
+        # across it would serialise every thread behind the slowest POST.
+        ok = self._pin_delivery_country(response.text)
+
+        with _PIN_LOCK:
+            if ok:
+                pinned.add(host)
+                failures.pop(host, None)
+            else:
+                failures[host] = attempts + 1
+        if not ok:
+            data["market_pin_failed"] = True
+        return ok
 
     # ── URL normalisation ──────────────────────────────────────────────
 
@@ -317,7 +364,27 @@ class AmazonTracker(BaseTracker):
         data["sku"] = extract_asin(self.url)
         data["market"] = self.tld
         data["ship_to"] = self.ship_to
+        # Whether the price above is a local one or an export quote is the
+        # difference between two legitimate numbers measuring different
+        # things (see the VAT evidence in the module docstring), so it
+        # belongs in raw rather than being inferred from the currency.
+        data["market_pinned"] = self._host_is_pinned()
         return data
+
+    def _host_is_pinned(self) -> Optional[bool]:
+        """True/False once pinning applies, None when it does not.
+
+        None means the question is moot — pin_market=False, or a Fetcher
+        that cannot be weak-referenced — and is not the same as False,
+        which means we tried and the offer may still be an export one.
+        """
+        if not self.ship_to or self.fetcher is None:
+            return None
+        try:
+            with _PIN_LOCK:
+                return urlsplit(self.url).netloc in _PINNED.get(self.fetcher, set())
+        except TypeError:
+            return None
 
     # ── Address-change call ────────────────────────────────────────────
 
