@@ -138,6 +138,8 @@ Any `FetchConfig` field can be passed as a keyword: `timeout`, `max_retries`,
 | Amazon (amazon.\*) | Working — verified live on four products across amazon.sa, amazon.de and amazon.co.uk: name, price, currency, list price, availability, seller, image, ASIN. One tracker covers every storefront; the delivery country is pinned so the tracked price stays in one market |
 | Extra (extra.com) | Working — verified live on two products: name, price, currency, availability, SKU, image, list price. `offers.price` is the selling price here (checked against a discounted page, unlike Carrefour), but there is no `priceSpecification` at all, so the strikethrough is read from the app state, anchored on the SKU. The GTM dataLayer fallback is **unverified**: Extra's payloads are JS literals that never parse |
 | Jarir (jarir.com) | Working — verified live on three products: name, price, currency, availability, SKU, image, list price. `offers.price` is the selling price, checked on two discounted pages. No `priceSpecification`, so the strikethrough and stock detail come from `window.__INITIAL_STATE__`, matched to the page by SKU rather than a text window |
+| Nahdi (nahdionline.com) | Working — verified live on four products: name, price, currency, availability, SKU, image, list price. The offer type tracks whether a discount exists: a discounted page ships an `AggregateOffer` whose `lowPrice` is what you pay and `highPrice` the strikethrough (safe only because `offerCount` is 1, which is kept in `raw`), an undiscounted one a plain `Offer` with `price`. Note the store is **nahdionline.com**, not nahdi.sa |
+| Lulu (luluhypermarket.com) | Working — verified live on four pages across two countries: name, price, currency, availability, SKU, image, list price. Country is a **path segment**, so currency is read per URL rather than fixed per class. Prices carry three decimals and are parsed as exact decimals, not guessed; `schema.org` availability always says InStock and is ignored in favour of the page payload; an out-of-stock page's `price: "0.00"` is dropped rather than stored |
 | AliExpress | Not yet implemented — data lives in an in-page JS variable |
 
 Adding a store is one file in `productspy/trackers/` plus a `@register()`
@@ -178,7 +180,19 @@ AmazonTracker(url, locale="en-GB:GBP:GB").fetch()
 Pinning costs one extra request per storefront per `Fetcher`, and the state
 is kept in the session, so every later product on that storefront reuses it.
 If it fails, the fetch still succeeds — you get the export-market price
-instead of the local one rather than an error.
+instead of the local one rather than an error — and it says so:
+
+```python
+product.raw["market_pinned"]       # True, False, or None
+product.raw["market_pin_failed"]   # present only when an attempt failed
+```
+
+`None` means pinning does not apply (`pin_market=False`, or a `Fetcher` that
+cannot be weak-referenced); `False` means it was attempted and the offer may
+still be an export one. A failed attempt is retried on the next few products
+rather than disabling pinning for the life of the `Fetcher`, so one bad POST
+no longer commits you to export prices — but if `market_pin_failed` keeps
+appearing, treat the prices from that storefront as a different series.
 
 **A cart button is not proof of stock.** Amazon takes backorders: it shows
 "Temporarily out of stock. Order now and we'll deliver when available" *and*

@@ -4,13 +4,16 @@ build-backend = "hatchling.build"
 
 [project]
 name = "productspy"
-version = "0.4.0"
+version = "0.5.0"
 description = "Extract product name, price and availability from shopping sites."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Renqwee" }]
-keywords = ["scraping", "price-tracking", "ecommerce", "amazon", "noon", "carrefour", "jarir"]
+keywords = [
+    "scraping", "price-tracking", "ecommerce",
+    "amazon", "noon", "carrefour", "jarir", "extra", "nahdi", "lulu",
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
