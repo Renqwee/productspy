@@ -430,15 +430,15 @@ class AmazonTracker(BaseTracker):
                     "actionSource": "glow",
                 },
                 accept_language=self.accept_language,
+                # Only what is specific to this call. The XHR shape —
+                # X-Requested-With, the Sec-Fetch-* trio, Accept: */* —
+                # now comes from Fetcher.xhr_headers, so it is no longer
+                # restated here and cannot drift out of step with it.
                 headers={
                     "anti-csrftoken-a2z": token,
                     "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
-                    "x-requested-with": "XMLHttpRequest",
                     "origin": f"https://www.amazon.{self.tld}",
                     "referer": self.url,
-                    "Sec-Fetch-Site": "same-origin",
-                    "Sec-Fetch-Mode": "cors",
-                    "Sec-Fetch-Dest": "empty",
                 },
                 cookies=self._cookies,
             )

@@ -114,6 +114,14 @@ class Fetcher:
         self._lock = threading.Lock()
         self._last_hit: dict[str, float] = {}
         self._proxy_index = 0
+        # Chosen once and held for the life of the Fetcher. It used to be
+        # picked per request, which meant one session, carrying one set of
+        # cookies, changed operating system between requests: Windows,
+        # then macOS, then Linux. No browser does that, and it contradicts
+        # the sec-ch-ua-platform that Chrome impersonation sends anyway.
+        # Variety across Fetchers is the part worth keeping; variety
+        # inside one is a signal, not cover.
+        self._user_agent = random.choice(self.config.user_agents)
         self._session = self._build_session()
 
     def _build_session(self) -> requests.Session:
@@ -146,8 +154,9 @@ class Fetcher:
             self._last_hit[host] = time.monotonic()
 
     def headers(self, accept_language: str = "en-US,en;q=0.9") -> dict[str, str]:
+        """Headers a browser sends when **navigating** to a page."""
         base = {
-            "User-Agent": random.choice(self.config.user_agents),
+            "User-Agent": self._user_agent,
             "Accept": (
                 "text/html,application/xhtml+xml,application/xml;q=0.9,"
                 "image/avif,image/webp,*/*;q=0.8"
@@ -159,6 +168,33 @@ class Fetcher:
             "Sec-Fetch-Dest": "document",
             "Sec-Fetch-Mode": "navigate",
             "Sec-Fetch-Site": "none",
+        }
+        base.update(self.config.extra_headers)
+        return base
+
+    def xhr_headers(self, accept_language: str = "en-US,en;q=0.9") -> dict[str, str]:
+        """Headers a browser sends from **JavaScript**, not from the URL bar.
+
+        `post` used to borrow the navigation set, which meant every POST
+        carried `Upgrade-Insecure-Requests: 1` and an `Accept` asking for
+        HTML and images. XMLHttpRequest sends neither, and `Sec-Fetch-Mode`
+        arrived as `navigate` on a call no navigation could produce. That
+        is a cheap tell on the one request we cannot afford to lose, since
+        the only route to pinning a delivery country is a POST.
+
+        Callers still override freely — Amazon adds its CSRF token, origin
+        and referer on top.
+        """
+        base = {
+            "User-Agent": self._user_agent,
+            "Accept": "*/*",
+            "Accept-Language": accept_language,
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "X-Requested-With": "XMLHttpRequest",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
         }
         base.update(self.config.extra_headers)
         return base
@@ -240,11 +276,12 @@ class Fetcher:
             if not response.ok:
                 raise FetchError(f"{host} returned HTTP {response.status_code}.")
 
-            # ── الجديد ────────────────────────────────────────────────
-            # 200 وجسم سليم، لكن المحتوى ناقص. BlockedError لا ParseError:
-            # المعنى "أعد المحاولة وبدّل بروكسي" لا "الموقع غيّر تصميمه".
-            # والتقاطه هنا يعيد استخدام backoff و throttle وتدوير
-            # البروكسيات الموجودة بدل ما نكرر حلقة إعادة محاولة فوق.
+            # A 200 with a well-formed body that is missing its content.
+            # BlockedError rather than ParseError: the meaning is "ask
+            # again, maybe on another proxy", not "the site changed its
+            # layout". Catching it inside this loop reuses the backoff,
+            # throttle and proxy rotation already here instead of making
+            # the caller build a second retry loop on top.
             if validator is not None and not validator(response.text):
                 if attempt < self.config.max_retries:
                     self._sleep_backoff(attempt)
@@ -255,7 +292,7 @@ class Fetcher:
                     f"{self.config.max_retries + 1} attempts. Transport is "
                     f"healthy; the site is serving a stripped page."
                 )
-            
+
             return response
 
         raise FetchError(f"Request to {host} failed after all retries.")
@@ -280,11 +317,15 @@ class Fetcher:
 
         Shares `self._session`, which is the whole point: the response
         sets session cookies that later GETs must carry.
+
+        Headers come from `xhr_headers`, not `headers`: the callers of
+        this method are all JavaScript-initiated endpoints, and sending a
+        page-navigation header set to one is a needless tell.
         """
         from urllib.parse import urlparse
 
         host = urlparse(url).netloc
-        merged = self.headers(accept_language)
+        merged = self.xhr_headers(accept_language)
         if headers:
             merged.update(headers)
         timeout = kwargs.pop("timeout", self.config.timeout)
@@ -305,7 +346,7 @@ class Fetcher:
             if classify_transport_error(exc) == "hard":
                 raise FetchError(f"could not reach {host}: {exc}") from exc
             raise BlockedError(f"{host} dropped a POST to {url}: {exc}") from exc
-        
+
     def resolve(self, url: str) -> str:
         """Follow short-link redirects.
 
